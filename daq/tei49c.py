@@ -6,14 +6,16 @@ Class TEI49C facilitating communication with a Thermo TEI49c instrument.
 """
 
 # from datetime import datetime
-import logging
 import os
+from common import datetimebin
+from common import staging
+import logging
+import colorama
+import serial
 import shutil
 import time
 import zipfile
-import serial
 
-from mkndaq.utils import datetimebin
 
 
 class TEI49C:
@@ -30,7 +32,7 @@ class TEI49C:
     _id = None
     _log = False
     _logger = None
-    _name = None
+    __name = None
     _reporting_interval = None
     _serial = None
     _set_config = None
@@ -59,7 +61,7 @@ class TEI49C:
 
         try:
             # instrument identification
-            self._name = name
+            self.__name = name
             self._id = config[name]['id'] + 128
             self._type = config[name]['type']
             self._serial_number = config[name]['serial_number']
@@ -111,13 +113,13 @@ class TEI49C:
             #     dte = self.get_data('date', save=False)
             #     if dte:
             #         tme = self.get_data('time', save=False)
-            #         msg = "Instrument '%s' initialized. Instrument datetime is %s %s." % (self._name, dte, tme)
+            #         msg = "Instrument '%s' initialized. Instrument datetime is %s %s." % (self.__name, dte, tme)
             #         self._logger.info(msg)
             #
             #         # set date and time
             #         self.set_datetime()
             #     else:
-            #         msg = "Instrument '%s' did not respond as expected." % self._name
+            #         msg = "Instrument '%s' did not respond as expected." % self.__name
             #         self._logger.error(msg)
             #     print(colorama.Fore.RED + "%s %s" % (time.strftime('%Y-%m-%d %H:%M:%S'), msg))
 
@@ -134,7 +136,7 @@ class TEI49C:
 
     def serial_comm(self, cmd: str, tidy=True) -> str:
         """
-        Send a command and retrieve the response. Assumes an open connection.
+        Send a command and retrieve the response. Opens and closes the connection.
 
         :param cmd: command sent to instrument
         :param tidy: remove echo and checksum after '*'
@@ -143,13 +145,14 @@ class TEI49C:
         _id = bytes([self._id])
         rcvd = b''
         try:
-            if self._simulate:
-                _id = b''
+            if not self._serial.is_open:
+                self._serial.open()
             self._serial.write(_id + (f"{cmd}\x0D").encode())
             time.sleep(0.5)
             while self._serial.in_waiting > 0:
                 rcvd = rcvd + self._serial.read(1024)
                 time.sleep(0.1)
+            self._serial.close()
 
             rcvd = rcvd.decode()
             if tidy:
@@ -157,9 +160,9 @@ class TEI49C:
                 rcvd = rcvd.split("*")[0]
                 # - remove echo before and including '\n'
                 if cmd.join("\n") in rcvd:
-                    rcvd = rcvd.split("\n")[1]
-                # remove trailing '\r\n'
-                rcvd = rcvd.rstrip()
+                    rcvd = rcvd.replace(cmd, "")
+                # remove leading or trailing '\r\n'
+                rcvd = rcvd.strip()
             return rcvd
 
         except Exception as err:
@@ -175,16 +178,14 @@ class TEI49C:
         :return current configuration of instrument
 
         """
-        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} .get_config (name={self._name})")
+        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} .get_config (name={self.__name})")
         cfg = []
         try:
-            self._serial.open()
             for cmd in self._get_config:
                 cfg.append(self.serial_comm(cmd))
-            self._serial.close()
 
             if self._log:
-                self._logger.info(f"Current configuration of '{self._name}': {cfg}")
+                self._logger.info(f"Current configuration of '{self.__name}': {cfg}")
 
             return cfg
 
@@ -203,13 +204,13 @@ class TEI49C:
         try:
             dte = self.serial_comm(f"set date {time.strftime('%m-%d-%y')}")
             dte = self.serial_comm("date")
-            msg = f"Date of instrument {self._name} set and reported as: {dte}"
+            msg = f"Date of instrument {self.__name} set and reported as: {dte}"
             print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}")
             self._logger.info(msg)
 
             tme = self.serial_comm(f"set time {time.strftime('%H:%M')}")
             tme = self.serial_comm("time")
-            msg = f"Time of instrument {self._name} set and reported as: {tme}"
+            msg = f"Time of instrument {self.__name} set and reported as: {tme}"
             print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}")
             self._logger.info(msg)
 
@@ -225,18 +226,15 @@ class TEI49C:
 
         :return new configuration as returned from instrument
         """
-        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} .set_config (name={self._name})")
+        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} .set_config (name={self.__name})")
         cfg = []
         try:
-            self._serial.open()
             self.set_datetime()
             for cmd in self._set_config:
                 cfg.append(self.serial_comm(cmd))
-            self._serial.close()
-            time.sleep(1)
 
             if self._log:
-                self._logger.info(f"Configuration of '{self._name}' set to: {cfg}")
+                self._logger.info(f"Configuration of '{self.__name}' set to: {cfg}")
 
             return cfg
 
@@ -248,7 +246,7 @@ class TEI49C:
     
     def get_data(self, cmd=None, save=True) -> str:
         """
-        Retrieve long record from instrument and optionally write to log.
+        Send a command and retrieve response. Command defaults to None, in which case it is taken from the config file.
 
         :param str cmd: command sent to instrument
         :param bln save: Should data be saved to file? default=True
@@ -256,28 +254,16 @@ class TEI49C:
         """
         try:
             dtm = time.strftime('%Y-%m-%d %H:%M:%S')
-            if self._simulate:
-                print(f"{dtm} .get_data (name={self._name}, save={save}, simulate={self._simulate})")
-            else:
-                print(f"{dtm} .get_data (name={self._name}, save={save})")
+            print(f"{dtm} .get_data (name={self.__name}, save={save})")
 
             if cmd is None:
                 cmd = self._get_data
-
-            if self._simulate:
-                data = self.simulate_get_data(cmd)
-            else:
-                if self._serial.is_open:
-                    self._serial.close()
-
-                self._serial.open()
-                data = self.serial_comm(cmd)
-                self._serial.close()
+            data = self.serial_comm(cmd)
 
             if save:
                 # generate the datafile name
                 self._datafile = os.path.join(self._datadir,
-                                             "".join([self._name, "-",
+                                             "".join([self.__name, "-",
                                                       datetimebin.dtbin(self._reporting_interval), ".dat"]))
 
                 if not os.path.exists(self._datafile):
@@ -292,20 +278,8 @@ class TEI49C:
                     fh.close()
 
                 # stage data for transfer
-                if self._file_to_stage is None:
-                    self._file_to_stage = self._datafile
-                elif self._file_to_stage != self._datafile:
-                    root = os.path.join(self._staging, os.path.basename(self._datadir))
-                    os.makedirs(root, exist_ok=True)
-                    if self._zip:
-                        # create zip file
-                        archive = os.path.join(root, "".join([os.path.basename(self._file_to_stage)[:-4], ".zip"]))
-                        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                            zf.write(self._file_to_stage, os.path.basename(self._file_to_stage))
-                    else:
-                        shutil.copyfile(self._file_to_stage, os.path.join(root, os.path.basename(self._file_to_stage)))
-                    self._file_to_stage = self._datafile
-
+                staging.stage_file(self)
+ 
             return data
 
         except Exception as err:
@@ -313,12 +287,10 @@ class TEI49C:
                 self._logger.error(err)
             print(err)
 
-    @classmethod
+            
     def get_o3(self) -> str:
         try:
-            self._serial.open()
             o3 = self.serial_comm('O3')
-            self._serial.close()
             return o3
 
         except Exception as err:
@@ -326,41 +298,18 @@ class TEI49C:
                 self._logger.error(err)
             print(err)
 
-    @classmethod
+            
     def print_o3(self) -> None:
         try:
-            self._serial.open()
             o3 = self.serial_comm('O3').split()
-            self._serial.close()
-
-            print(colorama.Fore.GREEN + f"{time.strftime('%Y-%m-%d %H:%M:%S')} [{self._name}] {o3[0]} {str(float(o3[1]))} {o3[2]}")
+            print(colorama.Fore.GREEN + f"{time.strftime('%Y-%m-%d %H:%M:%S')} [{self.__name}] {o3[0]} {str(float(o3[1]))} {o3[2]}")
 
         except Exception as err:
             if self._log:
                 self._logger.error(err)
             print(err)
 
-    @classmethod
-    def simulate_get_data(self, cmd=None) -> str:
-        """
 
-        :param cmd:
-        :return:
-        """
-        if cmd is None:
-            cmd = 'lrec'
-
-        dtm = time.strftime("%H:%M %m-%d-%y", time.gmtime())
-
-        if cmd == 'lrec':
-            data = f"(simulated) {dtm}  flags D800500 o3 0.394 cellai 123853.000 cellbi 94558.000 bncht 31.220 lmpt " \
-                   "53.754 o3lt 68.363 flowa 0.000 flowb 0.000 pres 724.798"
-        else:
-            data = f"(simulated) {dtm} Sorry, I can only simulate lrec. "
-
-        return data
-
-    @classmethod
     def get_all_rec(self, save=True) -> str:
         """
         Retrieve all long and short records from instrument and optionally write to file.
@@ -375,23 +324,16 @@ class TEI49C:
             CMD = ["lrec", "srec"]
             CAPACITY = [1792, 4096]
 
-            print("%s .get_all_rec (name=%s, save=%s)" % (dtm, self._name, save))
+            print("%s .get_all_rec (name=%s, save=%s)" % (dtm, self.__name, save))
 
-            # close potentially open port
-            if self._serial.is_open:
-                self._serial.close()
-
-            # open serial port
-            self._serial.open()
-
-            # retrieve data from instrument
+            # retrieve data from instrument in chunks
             for i in [0, 1]:
                 index = CAPACITY[i]
                 retrieve = 10
                 if save:
                     # generate the datafile name
                     datafile = os.path.join(self._datadir,
-                                            "".join([self._name, f"_all_{CMD[i]}-",
+                                            "".join([self.__name, f"_all_{CMD[i]}-",
                                                     time.strftime("%Y%m%d%H%M00"), ".dat"]))
 
                 while index > 0:
@@ -415,17 +357,8 @@ class TEI49C:
                     index = index - 10
 
                 # stage data for transfer
-                root = os.path.join(self._staging, os.path.basename(self._datadir))
-                os.makedirs(root, exist_ok=True)
-                if self._zip:
-                    # create zip file
-                    archive = os.path.join(root, "".join([os.path.basename(datafile[:-4]), ".zip"]))
-                    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as fh:
-                        fh.write(self._datafile, os.path.basename(datafile))
-                else:
-                    shutil.copyfile(self._datafile, os.path.join(root, os.path.basename(datafile)))
-
-            self._serial.close()
+                staging.stage_file(self)
+                    
             return 0
 
         except Exception as err:
