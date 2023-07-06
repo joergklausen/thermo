@@ -22,18 +22,19 @@ class TEI49C:
 
     _datadir = None
     _datafile = None
-    _file_to_stage = None
+    # _file_to_stage = None
     _data_header = None
     _get_config = None
     _get_data = None
     _id = None
+    _levels = None
     _log = False
     _logger = None
     __name = None
     _reporting_interval = None
     _serial = None
     _set_config = None
-    _staging = None
+    # _staging = None
     _zip = False
 
     def __init__(self, name: str, config: dict) -> None:
@@ -80,7 +81,7 @@ class TEI49C:
 
             # sampling, aggregation, reporting/storage
             self._sampling_interval = config[name]['sampling_interval']
-            self._reporting_interval = config['reporting_interval']
+            self._reporting_interval = config[name]['reporting_interval']
 
             # data file header and command to get data
             self._get_data = config[name]['get_data']
@@ -89,8 +90,11 @@ class TEI49C:
             # setup data directory and staging area
             self._datadir = os.path.join(os.path.expanduser(config['data']), name)
             os.makedirs(self._datadir, exist_ok=True)
-            self._staging = os.path.expanduser(config['staging']['path'])
-            self._zip = config[name]['staging_zip']
+            # self._staging = os.path.expanduser(config['staging']['path'])
+            # self._zip = config[name]['staging_zip']
+
+            # calibrator ozone set points (levels)
+            self._levels = iter(config["calibrator"]["levels"])
 
             # setup logging
             if config['logs']:
@@ -371,9 +375,13 @@ class TEI49C:
             print(err)
 
 
-    def set_o3_conc(self, conc: int) -> str:
+    def set_o3_conc(self) -> str:
         try:
-            res = self.serial_comm(f"set o3 conc {conc}")
+            dtm = time.strftime('%Y-%m-%d %H:%M:%S')
+
+            level = next(self._levels)
+            res = self.serial_comm(f"set o3 conc {level}")
+            print(f"{dtm} .set_o3_conc {level} ppb (name={self.__name})")
             if self._log:
                 self._logger.info(res)
  

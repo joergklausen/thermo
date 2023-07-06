@@ -38,7 +38,7 @@ class TEI49I:
     __sockaddr = None
     __socksleep = None
     __socktout = None
-    _staging = None
+    # _staging = None
     _zip = False
 
     def __init__(self, name: str, config: dict, simulate=False) -> None:
@@ -100,7 +100,7 @@ class TEI49I:
 
             # sampling, aggregation, reporting/storage
             self._sampling_interval = config[name]['sampling_interval']
-            self._reporting_interval = config['reporting_interval']
+            self._reporting_interval = config[name]['reporting_interval']
 
             # setup data directory
             datadir = os.path.expanduser(config['data'])
@@ -108,8 +108,8 @@ class TEI49I:
             os.makedirs(self._datadir, exist_ok=True)
 
             # staging area for files to be transfered
-            self._staging = os.path.expanduser(config['staging']['path'])
-            self._zip = config[name]['staging_zip']
+            # self._staging = os.path.expanduser(config['staging']['path'])
+            # self._zip = config[name]['staging_zip']
 
             # # query instrument to see if communication is possible, set date and time
             # if not self._simulate:
@@ -277,8 +277,8 @@ class TEI49I:
 
             data = self.tcpip_comm(cmd)
 
-            if self._simulate:
-                data = self.simulate_get_data(cmd)
+            # if self._simulate:
+            #     data = self.simulate_get_data(cmd)
 
             if save:
                 # generate the datafile name
@@ -296,15 +296,15 @@ class TEI49I:
                     fh.close()
 
                 # stage data for transfer
-                root = os.path.join(self._staging, os.path.basename(self._datadir))
-                os.makedirs(root, exist_ok=True)
-                if self._zip:
-                    # create zip file
-                    archive = os.path.join(root, "".join([os.path.basename(self.__datafile[:-4]), ".zip"]))
-                    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as fh:
-                        fh.write(self.__datafile, os.path.basename(self.__datafile))
-                else:
-                    shutil.copyfile(self.__datafile, os.path.join(root, os.path.basename(self.__datafile)))
+                # root = os.path.join(self._staging, os.path.basename(self._datadir))
+                # os.makedirs(root, exist_ok=True)
+                # if self._zip:
+                #     # create zip file
+                #     archive = os.path.join(root, "".join([os.path.basename(self.__datafile[:-4]), ".zip"]))
+                #     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as fh:
+                #         fh.write(self.__datafile, os.path.basename(self.__datafile))
+                # else:
+                #     shutil.copyfile(self.__datafile, os.path.join(root, os.path.basename(self.__datafile)))
 
             return data
 
