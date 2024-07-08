@@ -1,2 +1,5 @@
 pyserial
 colorama
+schedule
+PyYaml
+polars
